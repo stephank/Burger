@@ -46,17 +46,15 @@ class PacketInstructionsTopping(Topping):
     ]
 
     TYPES = {
-        "writeBoolean": "boolean",
-        "writeByte": "byte",
-        "writeBytes": "byte[]",
-        "writeChar": "char",
-        "writeChars": "string16",
-        "writeDouble": "double",
-        "writeFloat": "float",
-        "writeInt": "int",
-        "writeLong": "long",
-        "writeShort": "short",
-        "writeUTF": "string8"
+        "readBoolean": "boolean",
+        "readByte": "byte",
+        "readChar": "char",
+        "readDouble": "double",
+        "readFloat": "float",
+        "readInt": "int",
+        "readLong": "long",
+        "readShort": "short",
+        "readUTF": "string8"
     }
 
     SIZES = {
@@ -179,7 +177,7 @@ class PacketInstructionsTopping(Topping):
                                                  packet["class"], e)
 
     @staticmethod
-    def operations(jar, classname, args=('java.io.DataOutputStream',),
+    def operations(jar, classname, args=('java.io.DataInputStream',),
                    methodname=None, arg_names=("this", "stream")):
         """Gets the instructions of the specified method"""
 
@@ -230,24 +228,40 @@ class PacketInstructionsTopping(Topping):
                 name = operands[0].name
                 desc = operands[0].descriptor
                 if name in _PIT.TYPES:
-                    operations.append(Operation(instruction.pos, "write",
-                                                type=_PIT.TYPES[name],
-                                                field=stack.pop()))
+                    return_type = _PIT.TYPES[name]
+                    operations.append(Operation(instruction.pos, "read",
+                                                type=return_type))
                     stack.pop()
-                elif name == "write":
+                    stack.append(Operand(
+                        "data%s" % (len(operations) - 1),
+                        2 if return_type in ("long", "double") else 1)
+                    )
+                elif name == "read":
+                    if desc == "()I":
+                        operations.append(Operation(instruction.pos, "read",
+                                                    type="byte"))
+                        stack.pop()
+                        stack.append(Operand(
+                            "data%s" % (len(operations) - 1), 1))
+                    else:
+                        if desc.find("[BII") >= 0:
+                            stack.pop()
+                            stack.pop()
+                        operations.append(Operation(instruction.pos, "read",
+                                                    type="byte[]",
+                                                    field=stack.pop()))
+                        stack.pop()
+                elif name == "readFully":
                     if desc.find("[BII") >= 0:
                         stack.pop()
                         stack.pop()
-                    operations.append(Operation(
-                        instruction.pos, "write",
-                        type="byte[]" if desc.find("[B") >= 0 else "byte",
-                        field=stack.pop()))
-                    stack.pop()
-                elif desc == "(Ljava/lang/String;Ljava/io/DataOutputStream;)V":
-                    stack.pop()
-                    operations.append(Operation(instruction.pos, "write",
-                                                type="string16",
+                    operations.append(Operation(instruction.pos, "read",
+                                                type="byte[]",
                                                 field=stack.pop()))
+                    stack.pop()
+                elif name == "skipBytes":
+                    operations.append(Operation(instruction.pos, "skip",
+                                                count=stack.pop()))
                 else:
                     descriptor = method_descriptor(desc)
                     num_arguments = len(descriptor[0])
@@ -266,7 +280,7 @@ class PacketInstructionsTopping(Topping):
                             2 if descriptor[1] in ("long", "double") else 1)
                         )
 
-                    if "java.io.DataOutputStream" in descriptor[0]:
+                    if "java.io.DataInputStream" in descriptor[0]:
                         operations += _PIT.sub_operations(
                             jar, cf, instruction, operands[0],
                             [obj] + arguments if obj != "static" else arguments
@@ -513,7 +527,7 @@ class PacketInstructionsTopping(Topping):
         block_end = ("endif", "endloop", "endswitch", "else")
 
         for operation in _PIT.ordered_operations(operations):
-            if operation.operation == "write":
+            if operation.operation == "read":
                 if size != None:
                     if len(stack) == 1 and operation.type in _PIT.SIZES:
                         size += _PIT.SIZES[operation.type]
